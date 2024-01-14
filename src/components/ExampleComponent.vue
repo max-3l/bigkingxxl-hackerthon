@@ -27,20 +27,28 @@
         <q-card class="full-card" flat>
           <q-card-section>
             <q-card-title>
-              <strong class="header-label">🥴 Insights</strong> <br>
+              <strong class="header-label">🔥 Insights</strong> <br>
             </q-card-title>
             <q-card-main>
               <strong>Expertise</strong> <br>
               <template v-for="model in model_expertise" v-bind:key="model.model">
                 <div class="no-spacing">
-                  {{ model.model }} - {{ (model.expertise * 100).toFixed(2) }}%
-                  <!-- SVG that plots a confidence score between 0 and 1 as a bar. Uses confidence property.-->
-                  <svg class="full-card svg">
-                    <rect x="1" y="1" rx="1%" width="99%" height="15"
-                      style="fill:rgb(255,255,255);stroke-width:1;stroke:rgb(0,0,0)" />
-                    <rect x="2" y="2" rx="1%" :width="model.expertise * 99 + '%'" height="13"
-                      :style="'fill:' + expertiseColor(model.expertise) + ';stroke-width:0;stroke:rgb(0,0,0)'" />
-                  </svg>
+                  <template v-if="model.expertise >= 0">
+                    {{ model.model }} - {{ (model.expertise * 100).toFixed(2) }}%
+                    <svg class="full-card svg">
+                      <rect x="1" y="1" rx="1%" width="99%" height="15"
+                        style="fill:rgb(255,255,255);stroke-width:1;stroke:rgb(0,0,0)" />
+                      <rect x="2" y="2" rx="1%" :width="model.expertise * 99 + '%'" height="13"
+                        :style="'fill:' + expertiseColor(model.expertise) + ';stroke-width:0;stroke:rgb(0,0,0)'" />
+                    </svg>
+                  </template>
+                  <template v-else>
+                    {{ model.model }} - Not enough data
+                    <svg class="full-card svg">
+                      <rect x="1" y="1" rx="1%" width="99%" height="15"
+                        style="fill:gray;stroke-width:1;stroke:rgb(0,0,0)" />
+                    </svg>
+                  </template>
                 </div>
               </template>
               <strong>Annotations</strong> <br>
@@ -48,12 +56,16 @@
                 :outline="showAnnotationExplanation == annotation.index" :label="annotation.keyword"
                 :color="annotationColor(annotation)"
                 @click="showAnnotationExplanation = showAnnotationExplanation == annotation.index ? -1 : annotation.index" />
+              <q-chip v-if="annotations.length == 0" label="No annotations" color="gray" />
               <div class="top-space" v-if="showAnnotationExplanation != -1">
                 <strong>Annotation Details</strong> <br>
                 {{ annotationExplanation }}
-                <div class="thumbs">
+                <div class="thumbs" v-if="!voted">
                   <q-btn flat @click="thumbsUp">👍</q-btn>
                   <q-btn flat @click="thumbsDown">👎</q-btn>
+                </div>
+                <div v-else>
+                  <strong>Thank you for your feedback!</strong>
                 </div>
               </div>
             </q-card-main>
@@ -67,7 +79,10 @@
             <div class="no-spacing horizontal-cards">
               <strong class="header-label">🤖 AI Response</strong>
               <div class="no-spacing">
-                Confidence - {{ (confidence * 100).toFixed(2) }}%
+                <div class="no-spacing horizontal-cards full-width align-center">
+                  Confidence - {{ (confidence * 100).toFixed(2) }}%
+                  <q-toggle v-model="showConfidenceTokens" label="Detailed" />
+                </div>
                 <!-- SVG that plots a confidence score between 0 and 1 as a bar. Uses confidence property.-->
                 <svg class="full-card svg">
                   <rect x="1" y="1" rx="1%" width="99%" height="15"
@@ -79,7 +94,14 @@
             </div>
           </q-card-title>
           <q-card-main>
-            {{ response }}
+            <template v-if="showConfidenceTokens">
+              <template v-for="token in confidenceTokens" v-bind:key="token.index">
+                <font :color="confidenceFontColor(token.confidence)"> {{ token.token }} </font>
+              </template>
+            </template>
+            <template v-else>
+              {{ response }}
+            </template>
             <q-form v-show="done && !annotationSubmitted" @submit="submitAnnotation" class="horizontal-cards top-space">
               <q-input filled v-model="customAnnotation" label="Your annotation" dense class="full-width">
               </q-input>
@@ -111,6 +133,12 @@ interface Annotation {
 interface ModelExpertise {
   model: string;
   expertise: number;
+}
+
+interface ConfidenceToken {
+  index: number
+  token: string
+  confidence: number
 }
 
 const models = {
@@ -145,7 +173,10 @@ export default defineComponent({
       customAnnotation: ref(''),
       queryId: ref(-1),
       annotations: reactive<Annotation[]>([]),
-      model_expertise: reactive<ModelExpertise[]>([])
+      model_expertise: reactive<ModelExpertise[]>([]),
+      confidenceTokens: reactive<ConfidenceToken[]>([]),
+      showConfidenceTokens: ref(false),
+      voted: ref(false)
     };
   },
   computed: {
@@ -159,6 +190,11 @@ export default defineComponent({
   },
   watch: {
     model() {
+      this.reset()
+    }
+  },
+  methods: {
+    reset() {
       this.showAnnotationExplanation = -1
       this.response = ''
       this.confidence = 0.0
@@ -168,11 +204,12 @@ export default defineComponent({
       this.annotationSubmitted = false
       this.customAnnotation = ''
       this.queryId = -1
-      this.annotations = []
-      this.model_expertise = []
-    }
-  },
-  methods: {
+      this.annotations.splice(0)
+      this.model_expertise.splice(0)
+      this.confidenceTokens.splice(0)
+      this.showConfidenceTokens = false
+      this.voted = false
+    },
     async submitAnnotation(e: Event) {
       console.log('submit annotation')
       e.preventDefault();
@@ -261,6 +298,7 @@ export default defineComponent({
       if (this.showAnnotationExplanation == -1) {
         return
       }
+      this.voted = true
       fetch(`http://localhost:8000/upvote/${this.showAnnotationExplanation}`, {
         method: 'POST', // *GET, POST, PUT, DELETE, etc.)
       })
@@ -269,6 +307,7 @@ export default defineComponent({
       if (this.showAnnotationExplanation == -1) {
         return
       }
+      this.voted = true
       fetch(`http://localhost:8000/downvote/${this.showAnnotationExplanation}`, {
         method: 'POST', // *GET, POST, PUT, DELETE, etc.)
       })
@@ -292,6 +331,24 @@ export default defineComponent({
         return 'red'
       }
       return 'yellow'
+    },
+    confidenceFontColor(confidence: number): string {
+      const f = chroma.scale(['red', '#c9b23c', 'green'])
+      const color = f(confidence).hex()
+      return color
+    },
+    async getConfidenceTokens() {
+      const response = await fetch(`http://localhost:8000/query/${this.queryId}/confidence_tokens`)
+      if (!response.ok) {
+        console.log('not ok')
+        return;
+      }
+      if (!response.body) {
+        console.log('no body')
+        return;
+      }
+      const confidenceTokens = (await response.json())
+      this.confidenceTokens.push(...confidenceTokens)
     },
     async sendRequest() {
       const query = await fetch(`http://localhost:8000/query/${this.model}`, {
@@ -338,6 +395,7 @@ export default defineComponent({
       await this.queryAnnotations()
       const confidence = (await confidenceResponse.json())['confidence']
       this.animateConfidence(confidence.toFixed(2))
+      this.getConfidenceTokens()
     }
   }
 });
@@ -381,6 +439,10 @@ export default defineComponent({
   flex-direction: row;
   justify-content: space-between;
   gap: 10px;
+}
+
+.align-center {
+  align-items: center;
 }
 
 .svg {
