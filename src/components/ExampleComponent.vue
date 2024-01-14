@@ -1,6 +1,6 @@
 <template>
   <div v-if="showInput" class="input horizontal-cards">
-    <q-form @submit="onSubmit" class="full-card">
+    <q-form @submit="submitPrompt" class="full-card">
       <q-input rounded outlined v-model="prompt" label="Prompt" class="full-card" />
     </q-form>
     <q-select rounded outlined v-model="model" :options="models" label="Model" class="third-card" />
@@ -31,31 +31,23 @@
             </q-card-title>
             <q-card-main>
               <strong>Expertise</strong> <br>
-              <div class="no-spacing">
-                Chat GPT 3.5 - {{ (confidence * 100).toFixed(2) }}%
-                <!-- SVG that plots a confidence score between 0 and 1 as a bar. Uses confidence property.-->
-                <svg class="full-card svg">
-                  <rect x="1" y="1" rx="1%" width="99%" height="15"
-                    style="fill:rgb(255,255,255);stroke-width:1;stroke:rgb(0,0,0)" />
-                  <rect x="2" y="2" rx="1%" :width="confidence * 99 + '%'" height="13"
-                    :style="'fill:' + confidenceColor + ';stroke-width:0;stroke:rgb(0,0,0)'" />
-                </svg>
-              </div>
-              <div class="no-spacing">
-                Chat GPT 3.5 - {{ (confidence * 100).toFixed(2) }}%
-                <!-- SVG that plots a confidence score between 0 and 1 as a bar. Uses confidence property.-->
-                <svg class="full-card svg">
-                  <rect x="1" y="1" rx="1%" width="99%" height="15"
-                    style="fill:rgb(255,255,255);stroke-width:1;stroke:rgb(0,0,0)" />
-                  <rect x="2" y="2" rx="1%" :width="confidence * 99 + '%'" height="13"
-                    :style="'fill:' + confidenceColor + ';stroke-width:0;stroke:rgb(0,0,0)'" />
-                </svg>
-              </div>
+              <template v-for="model in model_expertise" v-bind:key="model.model">
+                <div class="no-spacing">
+                  {{ model.model }} - {{ (model.expertise * 100).toFixed(2) }}%
+                  <!-- SVG that plots a confidence score between 0 and 1 as a bar. Uses confidence property.-->
+                  <svg class="full-card svg">
+                    <rect x="1" y="1" rx="1%" width="99%" height="15"
+                      style="fill:rgb(255,255,255);stroke-width:1;stroke:rgb(0,0,0)" />
+                    <rect x="2" y="2" rx="1%" :width="model.expertise * 99 + '%'" height="13"
+                      :style="'fill:' + expertiseColor(model.expertise) + ';stroke-width:0;stroke:rgb(0,0,0)'" />
+                  </svg>
+                </div>
+              </template>
               <strong>Annotations</strong> <br>
-              <q-chip clickable :outline="showAnnotationExplanation == 0" label="🤖 Good Robot" color="green"
-                @click="showAnnotationExplanation = showAnnotationExplanation == 0 ? -1 : 0" />
-              <q-chip clickable :outline="showAnnotationExplanation == 1" label="🤖 Bad Robot" color="red"
-                @click="showAnnotationExplanation = showAnnotationExplanation == 1 ? -1 : 1" />
+              <q-chip v-for="annotation in annotations" :key="annotation.index" clickable
+                :outline="showAnnotationExplanation == annotation.index" :label="annotation.keyword"
+                :color="annotationColor(annotation)"
+                @click="showAnnotationExplanation = showAnnotationExplanation == annotation.index ? -1 : annotation.index" />
               <div class="top-space" v-if="showAnnotationExplanation != -1">
                 <strong>Annotation Details</strong> <br>
                 {{ annotationExplanation }}
@@ -104,8 +96,28 @@
 import {
   defineComponent,
   ref,
+  reactive,
 } from 'vue';
 import * as chroma from 'chroma-js';
+
+interface Annotation {
+  annotation: string;
+  keyword: string;
+  sentiment: number;
+  index: number;
+  num_votes: number;
+}
+
+interface ModelExpertise {
+  model: string;
+  expertise: number;
+}
+
+const models = {
+  'gpt-3.5-turbo-1106': 'Chat GPT 3.5 (latest)',
+  'gpt-3.5-turbo': 'Chat GPT 3.5',
+  'gpt-4': 'Chat GPT 4'
+}
 
 export default defineComponent({
   name: 'ExampleComponent',
@@ -126,22 +138,23 @@ export default defineComponent({
       showInput: ref(true),
       confidenceColor: ref('#000000'),
       showAnnotationExplanation: ref(-1),
-      model: ref('chat-gpt3'),
-      models: ref(['chat-gpt3', 'chat-gpt3.5', 'chat-gpt4']),
+      model: ref('gpt-3.5-turbo-1106'),
+      models: ref(Object.keys(models)),
       done: ref(false),
       annotationSubmitted: ref(false),
       customAnnotation: ref(''),
+      queryId: ref(-1),
+      annotations: reactive<Annotation[]>([]),
+      model_expertise: reactive<ModelExpertise[]>([])
     };
   },
   computed: {
     annotationExplanation(): string {
-      if (this.showAnnotationExplanation == 0) {
-        return 'This is a good robot response because it is very similar to the prompt.';
+      if (this.showAnnotationExplanation == -1) {
+        return ''
       }
-      if (this.showAnnotationExplanation == 1) {
-        return 'This is a bad robot response because it is very different from the prompt.';
-      }
-      return ''
+      const annotation = this.annotations.filter((annotation: Annotation) => annotation.index == this.showAnnotationExplanation)[0]
+      return annotation.annotation
     }
   },
   watch: {
@@ -154,10 +167,13 @@ export default defineComponent({
       this.done = false
       this.annotationSubmitted = false
       this.customAnnotation = ''
+      this.queryId = -1
+      this.annotations = []
+      this.model_expertise = []
     }
   },
   methods: {
-    submitAnnotation(e: Event) {
+    async submitAnnotation(e: Event) {
       console.log('submit annotation')
       e.preventDefault();
       if (this.customAnnotation == '') {
@@ -165,7 +181,57 @@ export default defineComponent({
         return
       }
       console.log('submit annotation')
+      const response = await fetch('http://localhost:8000/add_annotation', {
+        method: 'POST', // *GET, POST, PUT, DELETE, etc.)
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query_id: this.queryId,
+          annotation: this.customAnnotation
+        }),
+      })
+      if (!response.ok) {
+        console.log('not ok')
+        return;
+      }
+      if (!response.body) {
+        console.log('no body')
+        return;
+      }
+      const annotation = (await response.json())
+      this.annotations.push(annotation)
       this.annotationSubmitted = true
+    },
+    async queryAnnotations() {
+      const response = await fetch(`http://localhost:8000/query_annotation/${this.queryId}`)
+      if (!response.ok) {
+        console.log('not ok')
+        return;
+      }
+      if (!response.body) {
+        console.log('no body')
+        return;
+      }
+      const annotations = (await response.json())
+      this.annotations.push(...annotations)
+    },
+    expertiseColor(expertise: number): string {
+      const f = chroma.scale(['red', '#c9b23c', 'green'])
+      return f(expertise).hex()
+    },
+    async getModelExpertise() {
+      const response = await fetch(`http://localhost:8000/get_expertise_models/${this.queryId}`)
+      if (!response.ok) {
+        console.log('not ok')
+        return
+      }
+      if (!response.body) {
+        console.log('no body')
+        return
+      }
+      const modelExpertise = (await response.json())
+      this.model_expertise.push(...modelExpertise)
     },
     selectModel() {
       this.$q.dialog({
@@ -174,19 +240,9 @@ export default defineComponent({
         options: {
           type: 'radio',
           model: this.model,
-          items:
-            [{
-              label: 'Chat GPT 3',
-              value: 'chat-gpt3'
-            },
-            {
-              label: 'Chat GPT 3.5',
-              value: 'chat-gpt3.5'
-            },
-            {
-              label: 'Chat GPT 4',
-              value: 'chat-gpt4'
-            }]
+          items: Object.entries(models).map(([model, label]) => {
+            return { label: label, value: model }
+          })
         },
         cancel: true,
         persistent: true
@@ -195,17 +251,27 @@ export default defineComponent({
       });
       console.log('select model');
     },
-    onSubmit(e: Event) {
+    submitPrompt(e: Event) {
       e.preventDefault();
       console.log(this.prompt);
       this.showInput = false;
       this.sendRequest();
     },
     thumbsUp() {
-      console.log('thumbs up');
+      if (this.showAnnotationExplanation == -1) {
+        return
+      }
+      fetch(`http://localhost:8000/upvote/${this.showAnnotationExplanation}`, {
+        method: 'POST', // *GET, POST, PUT, DELETE, etc.)
+      })
     },
     thumbsDown() {
-      console.log('thumbs down')
+      if (this.showAnnotationExplanation == -1) {
+        return
+      }
+      fetch(`http://localhost:8000/downvote/${this.showAnnotationExplanation}`, {
+        method: 'POST', // *GET, POST, PUT, DELETE, etc.)
+      })
     },
     async animateConfidence(confidence: number) {
       const f = chroma.scale(['red', '#c9b23c', 'green'])
@@ -218,13 +284,40 @@ export default defineComponent({
         }
       }, 5);
     },
+    annotationColor(annotation: Annotation): string {
+      if (annotation.sentiment == 1) {
+        return 'green'
+      }
+      if (annotation.sentiment == -1) {
+        return 'red'
+      }
+      return 'yellow'
+    },
     async sendRequest() {
-      const stream = await fetch('http://localhost:8000/stream')
+      const query = await fetch(`http://localhost:8000/query/${this.model}`, {
+        method: 'POST', // *GET, POST, PUT, DELETE, etc.)
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          query: this.prompt
+        }),
+      })
+      if (!query.ok) {
+        console.log('not ok')
+        return;
+      }
+      if (!query.body) {
+        console.log('no body')
+        return;
+      }
+      const queryId = (await query.json())['queryId']
+      this.queryId = queryId
+      const stream = await fetch(`http://localhost:8000/query/${queryId}/response`)
       if (!stream.body) {
         console.log('no body')
         return;
       }
-      this.animateConfidence(0.9)
       const reader = stream.body.pipeThrough(new TextDecoderStream()).getReader()
       let done = false
       while (!done) {
@@ -236,6 +329,15 @@ export default defineComponent({
         }
         this.response = this.response + value.toString()
       }
+      const confidenceResponse = await fetch(`http://localhost:8000/query/${queryId}/confidence`)
+      if (!confidenceResponse.body) {
+        console.log('no body')
+        return;
+      }
+      await this.getModelExpertise()
+      await this.queryAnnotations()
+      const confidence = (await confidenceResponse.json())['confidence']
+      this.animateConfidence(confidence.toFixed(2))
     }
   }
 });
